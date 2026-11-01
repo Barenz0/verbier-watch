@@ -7,7 +7,7 @@ import unicodedata
 import requests
 
 PAGES = {
-    "Billet seul": "https://verbier4vallees.ch/en/online-shop/activities/opening-session_activity_410650",
+    "Billet seul": "https://verbier4vallees.ch/fr/shop-en-ligne/activites/opening-session_activity_410650",
     "Billet + train": "https://verbier4vallees.ch/fr/shop-en-ligne/activites/opening-session-saint-nicolas-express_activity_426820",
 }
 
@@ -58,20 +58,22 @@ def main() -> int:
     for name, url in PAGES.items():
         try:
             r = requests.get(url, headers=HEADERS, timeout=30)
-            r.raise_for_status()
         except requests.RequestException as e:
-            print(f"[{name}] ERREUR acces page : {e}")
+            print(f"[{name}] ERREUR reseau : {e}")
+            errors += 1
+            continue
+
+        if r.status_code == 404:
+            print(f"[{name}] 404 : page hors ligne, pas en vente")
+            continue
+        if r.status_code != 200:
+            print(f"[{name}] ERREUR HTTP {r.status_code}")
             errors += 1
             continue
 
         text = norm(visible_text(r.text))
-        if "opening session" not in text:
-            print(f"[{name}] Page inattendue (pas de 'Opening Session'), verifier l'URL")
-            errors += 1
-            continue
-
         found = [m for m in SOLD_OUT_MARKERS if m in text]
-        print(f"[{name}] 2026 mentionne : {'2026' in text} | marqueurs : {found or 'AUCUN'}")
+        print(f"[{name}] page EN LIGNE | 2026 : {'2026' in text} | marqueurs : {found or 'AUCUN'}")
 
         if not found:
             notify(f"Verbier : {name} DISPO ?", f"{name} semble en vente. Fonce !", url)
