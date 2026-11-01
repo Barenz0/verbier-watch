@@ -1,0 +1,21 @@
+name: Verbier Opening Session watcher
+
+on:
+  schedule:
+    - cron: "0 * * * *"   # toutes les heures (UTC). Ex. toutes les 10 min : "*/10 * * * *"
+  workflow_dispatch:       # lancement manuel = envoie aussi une notif de test
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - run: python check_verbier.py
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          TEST_NOTIFY: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
