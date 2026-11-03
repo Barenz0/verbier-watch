@@ -1,17 +1,18 @@
-"""Surveille la billetterie Opening Session Verbier et envoie un push ntfy si des billets sont dispo."""
+"""Surveille la billetterie Opening Session Verbier : alerte si dispo ou si le bandeau 'sold out' change."""
+import json
 import os
 import re
 import sys
 import unicodedata
+from pathlib import Path
 
 import requests
 
 PAGES = {
     "Billet seul": "https://verbier4vallees.ch/fr/shop-en-ligne/activites/opening-session_activity_410650",
-    "Billet + train": "https://verbier4vallees.ch/fr/shop-en-ligne/activites/opening-session-saint-nicolas-express_activity_426820",
+    "Billet + train": "https://verbier4vallees.ch/en/online-shop/activities/opening-session-st.nicholas-express_activity_426820",
 }
 
-# Textes indiquant que ce n'est PAS dispo (comparés sans accents, en minuscules)
 SOLD_OUT_MARKERS = [
     "not bookable", "sold out",
     "pas reservable", "plus reservable", "epuise", "complet",
@@ -26,6 +27,7 @@ HEADERS = {
 }
 
 TOPIC = os.environ.get("NTFY_TOPIC", "")
+STATE_FILE = Path("state.json")
 
 
 def norm(text: str) -> str:
@@ -50,35 +52,48 @@ def notify(title: str, message: str, url: str, priority: str = "urgent") -> None
     )
 
 
+def page_state(url: str) -> str:
+    """Retourne '404', 'DISPO' ou la phrase du bandeau d'epuisement."""
+    r = requests.get(url, headers=HEADERS, timeout=30)
+    if r.status_code == 404:
+        return "404"
+    r.raise_for_status()
+    text = norm(visible_text(r.text))
+    for m in SOLD_OUT_MARKERS:
+        hit = re.search(r"[^.!]{0,120}" + re.escape(m) + r"[^.!]{0,40}", text)
+        if hit:
+            return "SOLDOUT: " + hit.group(0).strip()
+    return "DISPO"
+
+
 def main() -> int:
     if os.environ.get("TEST_NOTIFY") == "true":
         notify("Test Verbier", "Le watcher fonctionne.", PAGES["Billet seul"], "default")
 
-    errors = 0
+    old = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+    new, errors = {}, 0
+
     for name, url in PAGES.items():
         try:
-            r = requests.get(url, headers=HEADERS, timeout=30)
+            state = page_state(url)
         except requests.RequestException as e:
-            print(f"[{name}] ERREUR reseau : {e}")
+            print(f"[{name}] ERREUR : {e}")
             errors += 1
+            new[name] = old.get(name, "")
             continue
 
-        if r.status_code == 404:
-            print(f"[{name}] 404 : page hors ligne, pas en vente")
-            continue
-        if r.status_code != 200:
-            print(f"[{name}] ERREUR HTTP {r.status_code}")
-            errors += 1
-            continue
+        new[name] = state
+        prev = old.get(name)
+        print(f"[{name}] {state}  (avant : {prev})")
 
-        text = norm(visible_text(r.text))
-        found = [m for m in SOLD_OUT_MARKERS if m in text]
-        print(f"[{name}] page EN LIGNE | 2026 : {'2026' in text} | marqueurs : {found or 'AUCUN'}")
+        if state == "DISPO":
+            notify(f"Verbier : {name} DISPO !", f"{name} : plus de bandeau sold out. Fonce !", url)
+            print(f"[{name}] >>> ALERTE DISPO")
+        elif prev is not None and state != prev:
+            notify(f"Verbier : {name} a change", f"Nouveau : {state[:150]}", url, "high")
+            print(f"[{name}] >>> ALERTE CHANGEMENT")
 
-        if not found:
-            notify(f"Verbier : {name} DISPO ?", f"{name} semble en vente. Fonce !", url)
-            print(f"[{name}] >>> NOTIFICATION ENVOYEE")
-
+    STATE_FILE.write_text(json.dumps(new, ensure_ascii=False, indent=2))
     return 1 if errors else 0
 
 
